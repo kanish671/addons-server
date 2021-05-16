@@ -3,9 +3,9 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2021-04-20 19:23+0000\n"
-"PO-Revision-Date: 2019-11-03 12:07+0000\n"
-"Last-Translator: aefgh39622 <aefgh39622@gmail.com>\n"
+"POT-Creation-Date: 2021-05-12 13:19+0000\n"
+"PO-Revision-Date: 2021-01-19 01:42+0000\n"
+"Last-Translator: Jabont <jabont@hotmail.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "Language: th\n"
 "MIME-Version: 1.0\n"
@@ -25,9 +25,8 @@ msgstr "มีปัญหาในการติดต่อกับเซิ
 msgid "Select a file..."
 msgstr "เลือกไฟล์..."
 
-#, fuzzy
 msgid "Your add-on should end with .zip, .xpi or .crx"
-msgstr "ส่วนเสริมของคุณควรลงท้ายด้วย .zip, .xpi, .crx หรือ .xml"
+msgstr "ส่วนเสริมของคุณควรลงท้ายด้วย .zip, .xpi, หรือ .crx"
 
 #. L10n: {0} is the percent of the file that has been uploaded.
 #, python-format

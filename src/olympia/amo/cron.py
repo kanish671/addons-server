@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 from django.core.files.storage import default_storage as storage
-from django.http import HttpRequest
 
 import olympia.core.logger
 
@@ -37,14 +36,12 @@ def gc(test_result=True):
         tasks.delete_logs.delay(chunk)
 
     two_weeks_ago = days_ago(15)
-    # Delete stale add-ons with no versions. Should soft-delete add-ons that
-    # are somehow not in incomplete status, hard-delete the rest. No email
-    # should be sent in either case.
-    versionless_addons = Addon.objects.filter(
+    # Hard-delete stale add-ons with no versions. No email should be sent.
+    versionless_addons = Addon.unfiltered.filter(
         versions__pk=None, created__lte=two_weeks_ago
     ).values_list('pk', flat=True)
     for chunk in chunked(versionless_addons, 100):
-        delete_addons.delay(chunk)
+        delete_addons.delay(chunk, with_deleted=True)
 
     # Delete stale FileUploads.
     stale_uploads = FileUpload.objects.filter(created__lte=two_weeks_ago).order_by('id')
@@ -65,22 +62,12 @@ def gc(test_result=True):
     ScannerResult.objects.filter(upload=None, version=None).delete()
 
 
-def _setup_default_prefixer():
-    """`reverse` depends on a prefixer being set for an app and/or locale in the url,
-    and for non-requests (i.e. cron) this isn't set up."""
-    request = HttpRequest()
-    request.META['SCRIPT_NAME'] = ''
-    prefixer = amo.urlresolvers.Prefixer(request)
-    amo.reverse.set_url_prefix(prefixer)
-
-
 def write_sitemaps():
-    _setup_default_prefixer()
-    index_url = get_sitemap_path()
+    index_url = get_sitemap_path(None, None)
     with storage.open(index_url, 'w') as index_file:
-        index_file.write(build_sitemap())
-    for section, page in get_sitemap_section_pages():
-        filename = get_sitemap_path(section, page)
+        index_file.write(build_sitemap(None, None))
+    for section, app_name, page in get_sitemap_section_pages():
+        filename = get_sitemap_path(section, app_name, page)
         with storage.open(filename, 'w') as sitemap_file:
-            content = build_sitemap(section, page)
+            content = build_sitemap(section, app_name, page)
             sitemap_file.write(content)

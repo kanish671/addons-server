@@ -1,6 +1,6 @@
-import datetime
 import os
 from unittest import mock
+from datetime import datetime
 
 from django.conf import settings
 from django.test import override_settings
@@ -9,6 +9,7 @@ from django.urls import reverse
 from olympia import amo
 from olympia.addons.models import AddonCategory
 from olympia.amo.sitemap import (
+    AccountSitemap,
     AddonSitemap,
     AMOSitemap,
     build_sitemap,
@@ -21,12 +22,10 @@ from olympia.amo.sitemap import (
 from olympia.amo.tests import (
     addon_factory,
     collection_factory,
-    license_factory,
     user_factory,
 )
 from olympia.constants.categories import CATEGORIES
 from olympia.ratings.models import Rating
-from olympia.translations.models import Translation
 
 from .test_views import TEST_SITEMAPS_DIR
 
@@ -43,41 +42,19 @@ def rating_factory(addon):
 
 def test_addon_sitemap():
     it = AddonSitemap.item_tuple
-    addon_a = addon_factory(
-        slug='addon-a',
-        privacy_policy='privacy!',
-        eula='eula!',
-        version_kw={'license': license_factory()},
-    )
-    # addon_factory generates licenses by default, but always with a builtin >0
+    addon_a = addon_factory(slug='addon-a')
     addon_b = addon_factory(slug='addon-b')
-    addon_b.update(last_updated=datetime.datetime(2020, 1, 1, 1, 1, 1))
-    addon_c = addon_factory(
-        slug='addon-c',
-        eula='only eula',
-        version_kw={'license': license_factory(builtin=1)},
-    )
-    addon_d = addon_factory(slug='addon-d', privacy_policy='only privacy')
-    # throw in an edge case of an empty policy in a non-default locale
-    Translation.objects.create(
-        id=addon_d.privacy_policy_id, localized_string='', locale='fr'
-    )
-    addon_e = addon_factory(slug='addon-e', eula='', privacy_policy='')  # empty
+    addon_b.update(last_updated=datetime(2020, 1, 1, 1, 1, 1))
+    addon_c = addon_factory(slug='addon-c')
     addon_factory(status=amo.STATUS_NOMINATED)  # shouldn't show up
     sitemap = AddonSitemap()
     expected = [
-        it(addon_e.last_updated, addon_e.slug, 'detail', 1),
-        it(addon_d.last_updated, addon_d.slug, 'detail', 1),
         it(addon_c.last_updated, addon_c.slug, 'detail', 1),
         it(addon_a.last_updated, addon_a.slug, 'detail', 1),
         it(addon_b.last_updated, addon_b.slug, 'detail', 1),
-        it(addon_d.last_updated, addon_d.slug, 'privacy', 1),
-        it(addon_a.last_updated, addon_a.slug, 'privacy', 1),
-        it(addon_c.last_updated, addon_c.slug, 'eula', 1),
-        it(addon_a.last_updated, addon_a.slug, 'eula', 1),
-        it(addon_a.last_updated, addon_a.slug, 'license', 1),
-        it(addon_e.last_updated, addon_e.slug, 'ratings.list', 1),
-        it(addon_d.last_updated, addon_d.slug, 'ratings.list', 1),
+        it(addon_c.last_updated, addon_c.slug, 'versions', 1),
+        it(addon_a.last_updated, addon_a.slug, 'versions', 1),
+        it(addon_b.last_updated, addon_b.slug, 'versions', 1),
         it(addon_c.last_updated, addon_c.slug, 'ratings.list', 1),
         it(addon_a.last_updated, addon_a.slug, 'ratings.list', 1),
         it(addon_b.last_updated, addon_b.slug, 'ratings.list', 1),
@@ -114,7 +91,12 @@ def test_addon_sitemap():
 def test_amo_sitemap():
     sitemap = AMOSitemap()
     for item in sitemap.items():
-        assert sitemap.location(item) == reverse(item)
+        urlname, app = item
+        assert sitemap.location(item).endswith(reverse(urlname, add_prefix=False))
+        if app:
+            assert sitemap.location(item).endswith(
+                f'/{app.short}{reverse(urlname, add_prefix=False)}'
+            )
 
 
 def test_categories_sitemap():
@@ -160,10 +142,10 @@ def test_categories_sitemap():
 
 def test_collection_sitemap(mozilla_user):
     collection_a = collection_factory(
-        author=mozilla_user, modified=datetime.datetime(2020, 1, 1, 1, 1, 1)
+        author=mozilla_user, modified=datetime(2020, 1, 1, 1, 1, 1)
     )
     collection_b = collection_factory(
-        author=mozilla_user, modified=datetime.datetime(2020, 2, 2, 2, 2, 2)
+        author=mozilla_user, modified=datetime(2020, 2, 2, 2, 2, 2)
     )
 
     collection_factory(author=user_factory())  # not mozilla user
@@ -180,27 +162,157 @@ def test_collection_sitemap(mozilla_user):
         assert sitemap.lastmod(item) == item.modified
 
 
+def test_accounts_sitemap():
+    user_with_themes = user_factory()
+    user_with_extensions = user_factory()
+    user_with_both = user_factory()
+    user_factory()  # no addons
+    extension = addon_factory(users=(user_with_extensions, user_with_both))
+    theme = addon_factory(
+        type=amo.ADDON_STATICTHEME, users=(user_with_themes, user_with_both)
+    )
+    sitemap = AccountSitemap()
+    items = list(sitemap.items())
+    assert items == [
+        (theme.last_updated, user_with_both.id, 1, 1),
+        (theme.last_updated, user_with_themes.id, 1, 1),
+        (extension.last_updated, user_with_extensions.id, 1, 1),
+    ]
+    for item in sitemap.items():
+        assert sitemap.location(item) == reverse('users.profile', args=[item.id])
+    # add some extra extensions and themes to test pagination
+    extra_extension_a = addon_factory(users=(user_with_extensions, user_with_both))
+    extra_extension_b = addon_factory(users=(user_with_extensions, user_with_both))
+    extra_theme_a = addon_factory(
+        type=amo.ADDON_STATICTHEME, users=(user_with_themes, user_with_both)
+    )
+    extra_theme_b = addon_factory(
+        type=amo.ADDON_STATICTHEME, users=(user_with_themes, user_with_both)
+    )
+    extra_theme_c = addon_factory(
+        type=amo.ADDON_STATICTHEME, users=(user_with_themes, user_with_both)
+    )
+    with mock.patch(
+        'olympia.amo.sitemap.EXTENSIONS_BY_AUTHORS_PAGE_SIZE', 2
+    ), mock.patch('olympia.amo.sitemap.THEMES_BY_AUTHORS_PAGE_SIZE', 3):
+        sitemap = AccountSitemap()
+        paginated_items = list(sitemap.items())
+    assert paginated_items == [
+        (extra_theme_c.last_updated, user_with_both.id, 1, 1),
+        (extra_theme_c.last_updated, user_with_both.id, 2, 1),
+        (extra_theme_c.last_updated, user_with_both.id, 1, 2),
+        (extra_theme_c.last_updated, user_with_themes.id, 1, 1),
+        (extra_theme_c.last_updated, user_with_themes.id, 1, 2),
+        (extra_extension_b.last_updated, user_with_extensions.id, 1, 1),
+        (extra_extension_b.last_updated, user_with_extensions.id, 2, 1),
+    ]
+    # repeat, but after changing some of the addons so they wouldn't be visible
+    with mock.patch(
+        'olympia.amo.sitemap.EXTENSIONS_BY_AUTHORS_PAGE_SIZE', 2
+    ), mock.patch('olympia.amo.sitemap.THEMES_BY_AUTHORS_PAGE_SIZE', 3):
+        extra_theme_a.update(status=amo.STATUS_NOMINATED)
+        sitemap = AccountSitemap()
+        assert list(sitemap.items()) == [
+            # now only one page of themes for both users
+            (extra_theme_c.last_updated, user_with_both.id, 1, 1),
+            (extra_theme_c.last_updated, user_with_both.id, 2, 1),
+            (extra_theme_c.last_updated, user_with_themes.id, 1, 1),
+            (extra_extension_b.last_updated, user_with_extensions.id, 1, 1),
+            (extra_extension_b.last_updated, user_with_extensions.id, 2, 1),
+        ]
+        user_with_both.addonuser_set.filter(addon=extra_extension_a).update(
+            listed=False
+        )
+        assert list(sitemap.items()) == [
+            (extra_theme_c.last_updated, user_with_both.id, 1, 1),
+            (extra_theme_c.last_updated, user_with_themes.id, 1, 1),
+            (extra_extension_b.last_updated, user_with_extensions.id, 1, 1),
+            # user_with_extensions still has 2 pages of extensions though
+            (extra_extension_b.last_updated, user_with_extensions.id, 2, 1),
+        ]
+        extra_theme_c.delete()
+        assert list(sitemap.items()) == [
+            # the date used for lastmod has changed
+            (extra_theme_b.last_updated, user_with_both.id, 1, 1),
+            (extra_theme_b.last_updated, user_with_themes.id, 1, 1),
+            (extra_extension_b.last_updated, user_with_extensions.id, 1, 1),
+            # user_with_extensions still has 2 pages of extensions though
+            (extra_extension_b.last_updated, user_with_extensions.id, 2, 1),
+        ]
+        # and check that deleting roles works too
+        user_with_both.addonuser_set.filter(addon=extra_theme_b).update(
+            role=amo.AUTHOR_ROLE_DELETED
+        )
+        assert list(sitemap.items()) == [
+            # the date used for lastmod has changed, and the order too
+            (extra_theme_b.last_updated, user_with_themes.id, 1, 1),
+            (extra_extension_b.last_updated, user_with_both.id, 1, 1),
+            (extra_extension_b.last_updated, user_with_extensions.id, 1, 1),
+            (extra_extension_b.last_updated, user_with_extensions.id, 2, 1),
+        ]
+
+
 def test_get_sitemap_section_pages():
     addon_factory()
     addon_factory()
     addon_factory()
-    assert list(sitemaps.keys()) == ['amo', 'addons', 'categories', 'collections']
+    assert list(sitemaps.keys()) == [
+        'amo',
+        'addons',
+        'categories',
+        'collections',
+        'users',
+    ]
 
     pages = get_sitemap_section_pages()
     assert pages == [
-        ('amo', 1),
-        ('addons', 1),
-        ('categories', 1),
-        ('collections', 1),
+        ('amo', None, 1),
+        ('addons', 'firefox', 1),
+        ('addons', 'android', 1),
+        ('categories', 'firefox', 1),
+        ('collections', 'firefox', 1),
+        ('collections', 'android', 1),
+        ('users', 'firefox', 1),
+        ('users', 'android', 1),
     ]
-    with mock.patch.object(AddonSitemap, 'limit', 3):
+    with mock.patch.object(AddonSitemap, 'limit', 5):
         pages = get_sitemap_section_pages()
         assert pages == [
-            ('amo', 1),
-            ('addons', 1),
-            ('addons', 2),
-            ('categories', 1),
-            ('collections', 1),
+            ('amo', None, 1),
+            ('addons', 'firefox', 1),
+            ('addons', 'firefox', 2),
+            ('addons', 'android', 1),
+            ('addons', 'android', 2),
+            ('categories', 'firefox', 1),
+            ('collections', 'firefox', 1),
+            ('collections', 'android', 1),
+            ('users', 'firefox', 1),
+            ('users', 'android', 1),
+        ]
+
+    # test the default pagination limit
+
+    def items_mock(self):
+        return [
+            AccountSitemap.item_tuple(datetime.now(), user_id, 7, 8)
+            for user_id in range(0, 2001)  # limit is 1000
+        ]
+
+    with mock.patch.object(AccountSitemap, 'items', items_mock):
+        pages = get_sitemap_section_pages()
+        assert pages == [
+            ('amo', None, 1),
+            ('addons', 'firefox', 1),
+            ('addons', 'android', 1),
+            ('categories', 'firefox', 1),
+            ('collections', 'firefox', 1),
+            ('collections', 'android', 1),
+            ('users', 'firefox', 1),
+            ('users', 'firefox', 2),
+            ('users', 'firefox', 3),
+            ('users', 'android', 1),
+            ('users', 'android', 2),
+            ('users', 'android', 3),
         ]
 
 
@@ -208,11 +320,13 @@ def test_build_sitemap():
     # test the index sitemap build first
     with mock.patch('olympia.amo.sitemap.get_sitemap_section_pages') as pages_mock:
         pages_mock.return_value = [
-            ('amo', 1),
-            ('addons', 1),
-            ('addons', 2),
+            ('amo', None, 1),
+            ('addons', 'firefox', 1),
+            ('addons', 'firefox', 2),
+            ('addons', 'android', 1),
+            ('addons', 'android', 2),
         ]
-        built = build_sitemap()
+        built = build_sitemap(section=None, app_name=None)
 
         with open(os.path.join(TEST_SITEMAPS_DIR, 'sitemap.xml')) as sitemap:
             assert built == sitemap.read()
@@ -221,26 +335,35 @@ def test_build_sitemap():
     def items_mock(self):
         return [
             AddonSitemap.item_tuple(
-                datetime.datetime(2020, 10, 2, 0, 0, 0), 'delicious-pierogi', 'detail'
+                datetime(2020, 10, 2, 0, 0, 0), 'delicious-pierogi', 'detail'
             ),
             AddonSitemap.item_tuple(
-                datetime.datetime(2020, 10, 1, 0, 0, 0), 'swanky-curry', 'detail'
+                datetime(2020, 10, 1, 0, 0, 0), 'swanky-curry', 'detail'
             ),
             AddonSitemap.item_tuple(
-                datetime.datetime(2020, 9, 30, 0, 0, 0), 'spicy-pierogi', 'detail'
+                datetime(2020, 9, 30, 0, 0, 0), 'spicy-pierogi', 'detail'
             ),
         ]
 
     with mock.patch.object(AddonSitemap, 'items', items_mock):
-        built = build_sitemap('addons')
+        firefox_built = build_sitemap('addons', 'firefox')
 
-        with open(os.path.join(TEST_SITEMAPS_DIR, 'sitemap-addons-2.xml')) as sitemap:
-            assert built == sitemap.read()
+        firefox_file = os.path.join(TEST_SITEMAPS_DIR, 'sitemap-addons-firefox-2.xml')
+        with open(firefox_file) as sitemap:
+            assert firefox_built == sitemap.read()
+
+        android_built = build_sitemap('addons', 'android')
+        android_file = os.path.join(TEST_SITEMAPS_DIR, 'sitemap-addons-android.xml')
+        with open(android_file) as sitemap:
+            assert android_built == sitemap.read()
 
 
 def test_get_sitemap_path():
     path = settings.SITEMAP_STORAGE_PATH
-    assert get_sitemap_path() == f'{path}/sitemap.xml'
-    assert get_sitemap_path('foo') == f'{path}/sitemap-foo.xml'
-    assert get_sitemap_path('foo', 1) == f'{path}/sitemap-foo.xml'
-    assert get_sitemap_path('foo', 2) == f'{path}/sitemap-foo-2.xml'
+    assert get_sitemap_path(None, None) == f'{path}/sitemap.xml'
+    assert get_sitemap_path('foo', None) == f'{path}/sitemap-foo.xml'
+    assert get_sitemap_path('foo', 'bar') == f'{path}/sitemap-foo-bar.xml'
+    assert get_sitemap_path('foo', None, 1) == f'{path}/sitemap-foo.xml'
+    assert get_sitemap_path('foo', None, 2) == f'{path}/sitemap-foo-2.xml'
+    assert get_sitemap_path('foo', 'bar', 1) == f'{path}/sitemap-foo-bar.xml'
+    assert get_sitemap_path('foo', 'bar', 2) == f'{path}/sitemap-foo-bar-2.xml'
